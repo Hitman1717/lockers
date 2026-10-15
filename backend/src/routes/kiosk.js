@@ -1,11 +1,17 @@
 import { Router } from 'express';
 import dataStore from '../services/store.js';
 import mqttService from '../services/mqtt.js';
-import { saveSnapshot, deleteLockerSnapshot, cleanAllSnapshots } from '../services/snapshotService.js';
+import {
+  saveLockerBiometrics,
+  getLockerBiometrics,
+  getAllLockersStorageSummary,
+  releaseLockerFiles,
+  cleanAllSnapshots
+} from '../services/snapshotService.js';
 
 const router = Router();
 
-// GET /api/kiosk/config
+// GET /api/kiosk/config - Terminal config and active lockers 1..10
 router.get('/config', (req, res) => {
   const wardId = parseInt(req.query.wardId || '1', 10);
   const ward = dataStore.wards.find((w) => w.id === wardId) || dataStore.wards[0];
@@ -15,22 +21,48 @@ router.get('/config', (req, res) => {
   const availableCount = lockers.filter((l) => l.status === 'available').length;
 
   res.json({
-    branch: branch ? branch.name : 'Unknown Branch',
-    ward: ward ? ward.name : 'Main Ward',
+    branch: branch ? branch.name : 'Central Memorial Hospital',
+    ward: ward ? ward.name : 'Ward 3A - Intensive Care',
     wardId: ward ? ward.id : 1,
-    floor: ward ? ward.floor : 'Ground',
+    floor: ward ? ward.floor : '3rd Floor',
     availableCount,
     totalLockers: lockers.length,
     lockers: lockers.map((l) => ({
       id: l.id,
       lockerNumber: l.lockerNumber,
+      folderName: l.folderName || `locker${l.id}`,
       status: l.status,
-      occupantName: l.occupantName
+      occupantName: l.occupantName,
+      occupantPhoto: l.occupantPhoto,
+      batteryLevel: l.batteryLevel
     }))
   });
 });
 
-// POST /api/kiosk/register
+// GET /api/kiosk/lockers-info - Storage audit of all 10 lockers (images & .npy embeddings)
+router.get('/lockers-info', (req, res) => {
+  const summary = getAllLockersStorageSummary();
+  res.json({
+    totalLockers: 10,
+    lockers: summary
+  });
+});
+
+// GET /api/kiosk/lockers/:id/biometrics - Detailed files & 512-dim embedding inspection
+router.get('/lockers/:id/biometrics', (req, res) => {
+  const { id } = req.params;
+  const biometrics = getLockerBiometrics(id);
+  const locker = dataStore.getLockerById(id);
+
+  res.json({
+    ...biometrics,
+    lockerNumber: locker ? locker.lockerNumber : `Locker ${id}`,
+    status: locker ? locker.status : 'unknown',
+    occupantName: locker ? locker.occupantName : null
+  });
+});
+
+// POST /api/kiosk/register - Check in user, allocate locker (1..10), store images & .npy embeddings
 router.post('/register', async (req, res) => {
   const { name, phone, pin, photo, wardId } = req.body;
 
@@ -48,10 +80,10 @@ router.post('/register', async (req, res) => {
     });
   }
 
-  // Save photo snapshot to local folder in kiosk-app
-  let localPhotoUrl = null;
+  // Save image and 512-dim embedding .npy into locker's specific folder (both backend & frontend public)
+  let savedBio = null;
   if (photo) {
-    localPhotoUrl = saveSnapshot(availableLocker.lockerNumber, photo);
+    savedBio = saveLockerBiometrics(availableLocker.id, photo);
   }
 
   // Update locker data
@@ -60,7 +92,7 @@ router.post('/register', async (req, res) => {
     pin: pin ? String(pin).trim() : null,
     occupantName: name.trim(),
     occupantPhone: phone || 'N/A',
-    occupantPhoto: localPhotoUrl || photo || null
+    occupantPhoto: savedBio ? savedBio.imageUrl : (photo || null)
   });
 
   // Log event
@@ -68,6 +100,8 @@ router.post('/register', async (req, res) => {
     occupantName: name,
     occupantPhone: phone,
     wardId: targetWardId,
+    folderName: availableLocker.folderName,
+    embeddingStored: Boolean(savedBio),
     timestamp: new Date().toISOString()
   });
 
@@ -84,43 +118,44 @@ router.post('/register', async (req, res) => {
 
   res.json({
     success: true,
-    message: `Locker ${availableLocker.lockerNumber} allocated and unlocked! Please deposit your belongings.`,
+    message: `${availableLocker.lockerNumber} allocated and unlocked! Please deposit your belongings.`,
     locker: {
       id: availableLocker.id,
       lockerNumber: availableLocker.lockerNumber,
-      status: 'unlocked'
+      folderName: availableLocker.folderName,
+      status: 'unlocked',
+      imageUrl: savedBio ? savedBio.imageUrl : null,
+      embeddingUrl: savedBio ? savedBio.embeddingUrl : null
     }
   });
 });
 
-// POST /api/kiosk/release
+// POST /api/kiosk/release - Unlock and release locker
 router.post('/release', async (req, res) => {
   const { lockerNumber, pin } = req.body;
 
-  if (!lockerNumber || !lockerNumber.trim()) {
-    return res.status(400).json({ error: 'Locker number is required.' });
+  if (!lockerNumber || !String(lockerNumber).trim()) {
+    return res.status(400).json({ error: 'Locker identifier is required.' });
   }
 
-  const locker = dataStore.getLockerById(lockerNumber.trim());
+  const locker = dataStore.getLockerById(String(lockerNumber).trim());
   if (!locker) {
-    return res.status(404).json({ error: `Locker ${lockerNumber} not found.` });
+    return res.status(404).json({ error: `Locker "${lockerNumber}" not found.` });
   }
 
   if (locker.status !== 'occupied' && locker.status !== 'unlocked') {
-    return res.status(400).json({ error: `Locker ${lockerNumber} is not currently occupied.` });
+    return res.status(400).json({ error: `${locker.lockerNumber} is not currently occupied.` });
   }
 
-  // If a PIN was configured and user provided a pin, verify it
+  // If PIN check needed
   if (locker.pin && pin && String(locker.pin) !== String(pin).trim()) {
     return res.status(401).json({ error: 'Incorrect PIN. Please re-enter or ask hospital staff.' });
   }
 
   const previousOccupant = locker.occupantName;
 
-  // Erase local snapshot image for this locker upon release
-  if (locker.occupantPhoto) {
-    deleteLockerSnapshot(locker.occupantPhoto);
-  }
+  // Safely archive locker files to temp/ so the compartment is fresh for the next occupant
+  releaseLockerFiles(locker.id, true);
 
   // Clear locker occupancy and unlock
   dataStore.updateLocker(locker.id, {
@@ -152,15 +187,15 @@ router.post('/release', async (req, res) => {
 
   res.json({
     success: true,
-    message: `Locker ${locker.lockerNumber} has been unlocked. Please retrieve your items. Thank you!`,
+    message: `${locker.lockerNumber} has been unlocked. Please retrieve your items. Thank you!`,
     lockerNumber: locker.lockerNumber
   });
 });
 
-// POST /api/kiosk/cleanup-snapshots (triggered on app close / unload / purge)
+// POST /api/kiosk/cleanup-snapshots
 router.post('/cleanup-snapshots', (req, res) => {
   cleanAllSnapshots();
-  res.json({ success: true, message: 'All local kiosk snapshots erased.' });
+  res.json({ success: true, message: 'Snapshots cleared.' });
 });
 
 export default router;

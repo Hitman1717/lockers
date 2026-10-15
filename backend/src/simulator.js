@@ -1,7 +1,7 @@
 import mqtt from 'mqtt';
 
 const brokerUrl = process.env.MQTT_URL || 'mqtt://127.0.0.1:1883';
-const simulatedLockers = ['101', '102', '103', '104', '105', '201', '202'];
+const simulatedLockers = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10'];
 
 console.log(`[IoT Simulator] Connecting to broker at ${brokerUrl}...`);
 const client = mqtt.connect(brokerUrl, {

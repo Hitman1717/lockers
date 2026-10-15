@@ -60,106 +60,47 @@ class LockerDataStore {
       }
     ];
 
-    this.lockers = [
-      {
-        id: '101',
+    // 10 Lockers mapped to folders locker1 to locker10
+    const initialOccupants = {
+      1: { name: 'Aarav Sharma', phone: '+91-98765-00001' },
+      2: { name: 'Priya Patel', phone: '+91-98765-00002' },
+      4: { name: 'Rohan Verma', phone: '+91-98765-00004' },
+      5: { name: 'Ananya Iyer', phone: '+91-98765-00005' },
+      6: { name: 'Vikram Singh', phone: '+91-98765-00006' },
+      7: { name: 'Sneha Reddy', phone: '+91-98765-00007' }
+    };
+
+    this.lockers = [];
+    for (let i = 1; i <= 10; i++) {
+      const isOccupied = initialOccupants[i] !== undefined;
+      this.lockers.push({
+        id: String(i),
         wardId: 1,
-        lockerNumber: 'L-101',
-        status: 'available', // available, occupied, unlocked, maintenance, offline
-        pin: null,
-        occupantName: null,
-        occupantPhone: null,
-        occupantPhoto: null,
+        lockerNumber: `Locker ${i}`,
+        folderName: `locker${i}`,
+        status: isOccupied ? 'occupied' : 'available',
+        pin: isOccupied ? `${1000 + i}` : null,
+        occupantName: isOccupied ? initialOccupants[i].name : null,
+        occupantPhone: isOccupied ? initialOccupants[i].phone : null,
+        occupantPhoto: isOccupied ? `/lockersInfo/locker${i}/image_1.jpg` : null,
         lastHeartbeat: new Date().toISOString(),
-        batteryLevel: 98
-      },
-      {
-        id: '102',
-        wardId: 1,
-        lockerNumber: 'L-102',
-        status: 'occupied',
-        pin: '1234',
-        occupantName: 'John Doe',
-        occupantPhone: '+1-555-0102',
-        occupantPhoto: null,
-        lastHeartbeat: new Date().toISOString(),
-        batteryLevel: 95
-      },
-      {
-        id: '103',
-        wardId: 1,
-        lockerNumber: 'L-103',
-        status: 'available',
-        pin: null,
-        occupantName: null,
-        occupantPhone: null,
-        occupantPhoto: null,
-        lastHeartbeat: new Date().toISOString(),
-        batteryLevel: 91
-      },
-      {
-        id: '104',
-        wardId: 1,
-        lockerNumber: 'L-104',
-        status: 'available',
-        pin: null,
-        occupantName: null,
-        occupantPhone: null,
-        occupantPhoto: null,
-        lastHeartbeat: new Date().toISOString(),
-        batteryLevel: 88
-      },
-      {
-        id: '105',
-        wardId: 1,
-        lockerNumber: 'L-105',
-        status: 'maintenance',
-        pin: null,
-        occupantName: null,
-        occupantPhone: null,
-        occupantPhoto: null,
-        lastHeartbeat: new Date().toISOString(),
-        batteryLevel: 42
-      },
-      {
-        id: '201',
-        wardId: 2,
-        lockerNumber: 'L-201',
-        status: 'available',
-        pin: null,
-        occupantName: null,
-        occupantPhone: null,
-        occupantPhoto: null,
-        lastHeartbeat: new Date().toISOString(),
-        batteryLevel: 97
-      },
-      {
-        id: '202',
-        wardId: 2,
-        lockerNumber: 'L-202',
-        status: 'occupied',
-        pin: '4321',
-        occupantName: 'Alice Smith',
-        occupantPhone: '+1-555-0202',
-        occupantPhoto: null,
-        lastHeartbeat: new Date().toISOString(),
-        batteryLevel: 93
-      }
-    ];
+        batteryLevel: Math.floor(88 + Math.random() * 12)
+      });
+    }
 
     this.events = [
       {
         id: 1,
-        lockerId: '102',
+        lockerId: '1',
         eventType: 'REGISTRATION',
-        details: { occupant: 'John Doe', action: 'Stored items' },
+        details: { occupant: 'Aarav Sharma', action: 'Stored items in Locker 1' },
         createdAt: new Date(Date.now() - 3600000).toISOString()
       },
       {
         id: 2,
-        lockerId: '105',
-        eventType: 'MAINTENANCE_FLAG',
-        details: { reason: 'Scheduled latch inspection' },
+        lockerId: '5',
+        eventType: 'REGISTRATION',
+        details: { occupant: 'Ananya Iyer', action: 'Stored items in Locker 5' },
         createdAt: new Date(Date.now() - 7200000).toISOString()
       }
     ];
@@ -174,12 +115,24 @@ class LockerDataStore {
   }
 
   getLockerById(id) {
-    return this.lockers.find((l) => String(l.id) === String(id) || l.lockerNumber === id);
+    if (!id) return null;
+    const cleanId = String(id).trim().toLowerCase();
+    const numMatch = cleanId.match(/(\d+)/);
+    const num = numMatch ? numMatch[1] : null;
+
+    return this.lockers.find((l) => {
+      if (String(l.id).toLowerCase() === cleanId) return true;
+      if (l.lockerNumber.toLowerCase() === cleanId) return true;
+      if (l.folderName && l.folderName.toLowerCase() === cleanId) return true;
+      if (num && String(l.id) === num) return true;
+      return false;
+    });
   }
 
   updateLocker(id, updates) {
-    const index = this.lockers.findIndex((l) => String(l.id) === String(id) || l.lockerNumber === id);
-    if (index === -1) return null;
+    const locker = this.getLockerById(id);
+    if (!locker) return null;
+    const index = this.lockers.indexOf(locker);
     this.lockers[index] = { ...this.lockers[index], ...updates };
     return this.lockers[index];
   }

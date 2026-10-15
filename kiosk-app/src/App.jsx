@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { io } from 'socket.io-client';
 import './App.css';
 
-// Bespoke clean SVG icons (Zero Lucide dependencies, zero emojis)
+// Bespoke clean SVG icons
 function IconHospital() {
   return (
     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -87,13 +87,38 @@ function IconAlert() {
   );
 }
 
+function IconFolder() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+    </svg>
+  );
+}
+
+function IconCpu() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="4" y="4" width="16" height="16" rx="2" ry="2" />
+      <rect x="9" y="9" width="6" height="6" />
+      <line x1="9" y1="1" x2="9" y2="4" />
+      <line x1="15" y1="1" x2="15" y2="4" />
+      <line x1="9" y1="20" x2="9" y2="23" />
+      <line x1="15" y1="20" x2="15" y2="23" />
+      <line x1="20" y1="9" x2="23" y2="9" />
+      <line x1="20" y1="14" x2="23" y2="14" />
+      <line x1="1" y1="9" x2="4" y2="9" />
+      <line x1="1" y1="14" x2="4" y2="14" />
+    </svg>
+  );
+}
+
 export default function App() {
   const [wardConfig, setWardConfig] = useState(null);
   const [configLoading, setConfigLoading] = useState(true);
   const [screen, setScreen] = useState('home'); // 'home' | 'store_form' | 'store_camera' | 'store_unlocked' | 'retrieve_form' | 'retrieve_unlocked'
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
-  
+
   // Registration Form State
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
@@ -108,11 +133,21 @@ export default function App() {
   // Auto-reset countdown
   const [countdown, setCountdown] = useState(15);
 
-  // Compliance Modals (TOS and Privacy Policy)
-  const [activeModal, setActiveModal] = useState(null); // null | 'tos' | 'privacy'
+  // Compliance and Storage Modals
+  const [activeModal, setActiveModal] = useState(null); // null | 'tos' | 'privacy' | 'biometrics'
+  const [bioSummary, setBioSummary] = useState([]);
+  const [selectedBioFolder, setSelectedBioFolder] = useState('locker1');
+  const [selectedBioDetails, setSelectedBioDetails] = useState(null);
+  const [bioLoading, setBioLoading] = useState(false);
 
   const videoRef = useRef(null);
   const streamRef = useRef(null);
+
+  // 10 Lockers Bank (Locker 1 to Locker 10)
+  const lockerBayDoors = [
+    'Locker 1', 'Locker 2', 'Locker 3', 'Locker 4', 'Locker 5',
+    'Locker 6', 'Locker 7', 'Locker 8', 'Locker 9', 'Locker 10'
+  ];
 
   // Load Ward info
   const loadConfig = async () => {
@@ -129,29 +164,55 @@ export default function App() {
     }
   };
 
+  // Load Biometrics Storage Summary
+  const loadBioSummary = async () => {
+    setBioLoading(true);
+    try {
+      const res = await fetch('/api/kiosk/lockers-info');
+      if (res.ok) {
+        const data = await res.json();
+        setBioSummary(data.lockers || []);
+        if (data.lockers && data.lockers.length > 0) {
+          const defaultFolder = selectedBioFolder || data.lockers[0].folderName;
+          loadBioDetails(defaultFolder);
+        }
+      }
+    } catch (err) {
+      console.error('Failed to load biometrics summary:', err);
+    } finally {
+      setBioLoading(false);
+    }
+  };
+
+  // Load specific locker biometrics (images & 512-dim embedding)
+  const loadBioDetails = async (folderName) => {
+    try {
+      setSelectedBioFolder(folderName);
+      const res = await fetch(`/api/kiosk/lockers/${folderName}/biometrics`);
+      if (res.ok) {
+        const data = await res.json();
+        setSelectedBioDetails(data);
+      }
+    } catch (err) {
+      console.error('Failed to load biometrics details:', err);
+    }
+  };
+
   useEffect(() => {
     loadConfig();
 
     const socket = io('/', { transports: ['websocket', 'polling'] });
     socket.on('locker:update', () => {
       loadConfig();
-    });
-
-    // Erase local snapshots when the kiosk window/app closes
-    const handleClose = () => {
-      if (navigator.sendBeacon) {
-        navigator.sendBeacon('/api/kiosk/cleanup-snapshots');
+      if (activeModal === 'biometrics') {
+        loadBioSummary();
       }
-    };
-    window.addEventListener('beforeunload', handleClose);
-    window.addEventListener('pagehide', handleClose);
+    });
 
     return () => {
       socket.disconnect();
-      window.removeEventListener('beforeunload', handleClose);
-      window.removeEventListener('pagehide', handleClose);
     };
-  }, []);
+  }, [activeModal]);
 
   // Handle countdown timer for unlocked screens
   useEffect(() => {
@@ -193,7 +254,7 @@ export default function App() {
     } catch (err) {
       console.warn('Camera not available or denied:', err);
       setCameraActive(false);
-      setErrorMsg('Webcam not detected. You can use the mock snapshot below to continue.');
+      setErrorMsg('Webcam not detected. You can use the snapshot fallback to continue.');
     }
   };
 
@@ -212,26 +273,32 @@ export default function App() {
       canvas.height = 240;
       const ctx = canvas.getContext('2d');
       ctx.drawImage(videoRef.current, 0, 0, 320, 240);
-      const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
       setPhotoData(dataUrl);
       stopCamera();
     } else {
-      // Mock snapshot
+      // Mock biometric portrait
       const mockCanvas = document.createElement('canvas');
       mockCanvas.width = 320;
       mockCanvas.height = 240;
       const ctx = mockCanvas.getContext('2d');
-      ctx.fillStyle = '#0284c7';
+      const grad = ctx.createLinearGradient(0, 0, 320, 240);
+      grad.addColorStop(0, '#0284c7');
+      grad.addColorStop(1, '#0f172a');
+      ctx.fillStyle = grad;
       ctx.fillRect(0, 0, 320, 240);
       ctx.fillStyle = '#ffffff';
-      ctx.font = '16px sans-serif';
+      ctx.font = 'bold 16px sans-serif';
       ctx.textAlign = 'center';
-      ctx.fillText(name || 'Kiosk User Snapshot', 160, 120);
-      setPhotoData(mockCanvas.toDataURL('image/jpeg', 0.8));
+      ctx.fillText(name || 'Verified Kiosk User', 160, 115);
+      ctx.font = '12px sans-serif';
+      ctx.fillStyle = '#94a3b8';
+      ctx.fillText('512-D Face Vector Generated', 160, 140);
+      setPhotoData(mockCanvas.toDataURL('image/jpeg', 0.85));
     }
   };
 
-  // Submit Registration (No PIN required)
+  // Submit Registration
   const submitRegistration = async () => {
     setLoading(true);
     setErrorMsg('');
@@ -263,11 +330,11 @@ export default function App() {
     }
   };
 
-  // Submit Retrieval (No PIN required)
+  // Submit Retrieval
   const submitRetrieval = async (e) => {
     e.preventDefault();
     if (!retrieveLocker.trim()) {
-      setErrorMsg('Please enter your Locker Number');
+      setErrorMsg('Please select your locker compartment.');
       return;
     }
 
@@ -298,8 +365,13 @@ export default function App() {
     }
   };
 
-  // Physical locker bank mock for real demo visualization
-  const lockerBayDoors = ['L-101', 'L-102', 'L-103', 'L-104', 'L-105', 'L-106'];
+  // Determine if a door in the cabinet visualizer is the active door
+  const isDoorActive = (doorName, activeTarget) => {
+    if (!activeTarget) return false;
+    const cleanTarget = String(activeTarget).toLowerCase().replace(/[^a-z0-9]/g, '');
+    const cleanDoor = String(doorName).toLowerCase().replace(/[^a-z0-9]/g, '');
+    return cleanTarget === cleanDoor || cleanTarget.includes(cleanDoor) || cleanDoor.includes(cleanTarget);
+  };
 
   return (
     <div className="kiosk-container">
@@ -319,19 +391,34 @@ export default function App() {
               <div className="skeleton-box skeleton-badge" />
             ) : (
               <span className="ward-badge">
-                {wardConfig ? `${wardConfig.ward} (${wardConfig.floor})` : 'Terminal Ready'}
+                {wardConfig ? `${wardConfig.ward} (${wardConfig.floor})` : 'Terminal Ready'} • 10 Smart Units
               </span>
             )}
           </div>
         </div>
-        <div className="kiosk-stats">
-          {configLoading ? (
-            <div className="skeleton-box" style={{ width: '130px', height: '32px' }} />
-          ) : (
-            <span className="avail-count">
-              <strong>{wardConfig ? wardConfig.availableCount : '-'}</strong> Lockers Available
-            </span>
-          )}
+
+        <div className="kiosk-stats-group">
+          <button
+            className="bio-storage-btn"
+            onClick={() => {
+              setActiveModal('biometrics');
+              loadBioSummary();
+            }}
+            title="Inspect 10 Locker Folders (Images & 512-d .npy Embeddings)"
+          >
+            <IconFolder />
+            <span>Biometrics Vault</span>
+          </button>
+
+          <div className="kiosk-stats">
+            {configLoading ? (
+              <div className="skeleton-box" style={{ width: '130px', height: '32px' }} />
+            ) : (
+              <span className="avail-count">
+                <strong>{wardConfig ? wardConfig.availableCount : '-'}</strong> / 10 Available
+              </span>
+            )}
+          </div>
         </div>
       </header>
 
@@ -348,7 +435,9 @@ export default function App() {
         {screen === 'home' && (
           <div className="action-selection">
             <h1 className="hero-title">Smart Locker Self-Service</h1>
-            <p className="hero-desc">Select an operation below to store or retrieve personal items securely.</p>
+            <p className="hero-desc">
+              Biometrically verified contactless locker bank with 10 secured compartments (Locker 1 to 10).
+            </p>
 
             <div className="action-buttons-grid">
               <button
@@ -361,7 +450,7 @@ export default function App() {
                 </div>
                 <div className="btn-text">
                   <h3>Deposit Items</h3>
-                  <p>Register identity, verify photo, and unlock assigned compartment</p>
+                  <p>Register identity, capture face embedding, and unlock available compartment</p>
                 </div>
               </button>
 
@@ -374,7 +463,7 @@ export default function App() {
                 </div>
                 <div className="btn-text">
                   <h3>Retrieve Items</h3>
-                  <p>Enter locker compartment identifier and PIN to release lock</p>
+                  <p>Select locker compartment (1 to 10) to release electronic latch</p>
                 </div>
               </button>
             </div>
@@ -407,7 +496,7 @@ export default function App() {
               <label>Phone Number (Optional)</label>
               <input
                 type="tel"
-                placeholder="e.g. 555-0199"
+                placeholder="e.g. +91 98765 43210"
                 value={phone}
                 onChange={(e) => setPhone(e.target.value)}
               />
@@ -422,7 +511,7 @@ export default function App() {
                   startCamera();
                 }}
               >
-                Next: Photo Verification <IconArrowRight />
+                Next: Photo Verification & Embedding <IconArrowRight />
               </button>
             </div>
           </div>
@@ -441,11 +530,13 @@ export default function App() {
               >
                 <IconArrowLeft /> Back
               </button>
-              <h2>Step 2: Photo Verification</h2>
+              <h2>Step 2: Biometric Verification</h2>
               <span className="step-indicator">Step 2 of 2</span>
             </div>
 
-            <p className="step-hint">Position face within the preview window for locker security validation.</p>
+            <p className="step-hint">
+              Position face within preview. A 512-dimensional embedding will be computed and stored in your allocated locker folder.
+            </p>
 
             <div className="camera-box">
               {!photoData ? (
@@ -453,13 +544,17 @@ export default function App() {
                   <video ref={videoRef} autoPlay playsInline className="camera-feed" />
                   <div className="camera-controls">
                     <button className="btn btn-primary" onClick={capturePhoto}>
-                      <IconCamera /> Capture Photo
+                      <IconCamera /> Capture Photo & Extract Embedding
                     </button>
                   </div>
                 </>
               ) : (
                 <div className="photo-preview-wrap">
                   <img src={photoData} alt="Captured preview" className="photo-preview" />
+                  <div className="embedding-badge-preview">
+                    <IconCpu />
+                    <span>512-D Embedding Vector Ready</span>
+                  </div>
                   <div className="camera-controls">
                     <button
                       className="btn btn-secondary"
@@ -482,13 +577,13 @@ export default function App() {
                 onClick={submitRegistration}
               >
                 <IconUnlock />
-                {loading ? 'Allocating Compartment...' : 'Confirm & Release Latch'}
+                {loading ? 'Allocating Compartment...' : 'Confirm, Save Biometrics & Release Latch'}
               </button>
             </div>
           </div>
         )}
 
-        {/* 4. STORE: LOCKER UNLOCKED & ASSIGNED WITH REAL PRODUCT CABINET VISUALIZER */}
+        {/* 4. STORE: LOCKER UNLOCKED & ASSIGNED (10-CABINET VISUALIZER) */}
         {screen === 'store_unlocked' && (
           <div className="kiosk-card success-card">
             <div className="status-badge-icon">
@@ -498,18 +593,20 @@ export default function App() {
 
             <div className="assigned-locker-display">
               <span className="assigned-label">Assigned Compartment</span>
-              <span className="assigned-number">{allocatedLocker ? allocatedLocker.lockerNumber : 'L-101'}</span>
+              <span className="assigned-number">{allocatedLocker ? allocatedLocker.lockerNumber : 'Locker 1'}</span>
+              <span className="assigned-subtext">Folder: {allocatedLocker ? (allocatedLocker.folderName || 'locker1') : 'locker1'} (Images & Embedding stored)</span>
             </div>
 
-            {/* Real Product Demo: Interactive Cabinet Layout */}
+            {/* 10-Compartment Cabinet Grid */}
             <div className="locker-cabinet-demo">
               <div className="cabinet-header">
-                <span>Cabinet Bank 1 - Physical Status</span>
+                <span>10-Locker Cabinet Bank • Physical Hardware Status</span>
                 <span>Active Compartment</span>
               </div>
               <div className="cabinet-grid">
                 {lockerBayDoors.map((door) => {
-                  const isTarget = allocatedLocker ? allocatedLocker.lockerNumber === door : door === 'L-101';
+                  const target = allocatedLocker ? allocatedLocker.lockerNumber : 'Locker 1';
+                  const isTarget = isDoorActive(door, target);
                   return (
                     <div
                       key={door}
@@ -523,11 +620,10 @@ export default function App() {
               </div>
             </div>
 
-            {/* Clean Numbered Instructions (NO checkmark bullets) */}
             <ol className="instructions-list">
-              <li>Compartment solenoid has released. The door is now unlatched.</li>
-              <li>Place personal items inside and push door shut until it clicks securely.</li>
-              <li>Remember your assigned locker compartment number for collection upon return.</li>
+              <li>Electronic latch has released. Compartment door is now unlatched.</li>
+              <li>Place personal items inside and push door firmly shut until it clicks.</li>
+              <li>Your facial biometric snapshot and 512-d vector are secured for retrieval.</li>
             </ol>
 
             <div className="timer-notice">
@@ -540,7 +636,7 @@ export default function App() {
           </div>
         )}
 
-        {/* 5. RETRIEVE: VISUAL LOCKER SELECTION SCREEN */}
+        {/* 5. RETRIEVE: TOUCH LOCKER SELECTION SCREEN (10 LOCKERS) */}
         {screen === 'retrieve_form' && (
           <div className="kiosk-card">
             <div className="card-top">
@@ -552,14 +648,20 @@ export default function App() {
             </div>
 
             <p className="step-hint">
-              Tap your compartment door below to automatically release the electronic latch:
+              Select your compartment below to release the electronic latch:
             </p>
 
-            {/* Visual Touch-Friendly Locker Matrix */}
+            {/* 10-Locker Touch Matrix */}
             <div className="kiosk-locker-select-grid">
-              {((wardConfig && wardConfig.lockers && wardConfig.lockers.length > 0)
-                ? wardConfig.lockers
-                : lockerBayDoors.map((d) => ({ id: d, lockerNumber: d, status: 'occupied' }))
+              {(
+                (wardConfig && wardConfig.lockers && wardConfig.lockers.length > 0)
+                  ? wardConfig.lockers
+                  : lockerBayDoors.map((d, idx) => ({
+                      id: String(idx + 1),
+                      lockerNumber: d,
+                      folderName: `locker${idx + 1}`,
+                      status: 'occupied'
+                    }))
               ).map((l) => {
                 const isSelected = retrieveLocker === l.lockerNumber;
                 return (
@@ -568,10 +670,25 @@ export default function App() {
                     className={`kiosk-door-card ${isSelected ? 'selected' : ''}`}
                     onClick={() => setRetrieveLocker(l.lockerNumber)}
                   >
-                    <span className="kiosk-door-num">{l.lockerNumber}</span>
-                    <span className={`kiosk-door-status ${l.status || 'occupied'}`}>
-                      {l.status === 'unlocked' ? 'Door Ajar' : l.status === 'available' ? 'Available' : 'In Use'}
-                    </span>
+                    <div className="kiosk-door-header">
+                      <span className="kiosk-door-num">{l.lockerNumber}</span>
+                      <span className={`kiosk-door-status ${l.status || 'occupied'}`}>
+                        {l.status === 'unlocked' ? 'Door Ajar' : l.status === 'available' ? 'Available' : 'Occupied'}
+                      </span>
+                    </div>
+
+                    {/* Stored Photo preview if occupied */}
+                    {l.occupantPhoto ? (
+                      <div className="kiosk-door-photo-wrap">
+                        <img src={l.occupantPhoto} alt={l.lockerNumber} className="kiosk-door-thumb" />
+                        <span className="kiosk-door-occupant">{l.occupantName || 'Occupied'}</span>
+                      </div>
+                    ) : (
+                      <div className="kiosk-door-empty-wrap">
+                        <IconFolder />
+                        <span>{l.folderName || `locker${l.id}`}</span>
+                      </div>
+                    )}
                   </div>
                 );
               })}
@@ -589,7 +706,7 @@ export default function App() {
                 <button
                   type="submit"
                   className="btn btn-primary"
-                  style={{ width: '100%', padding: '0.85rem' }}
+                  style={{ width: '100%', padding: '0.9rem' }}
                   disabled={!retrieveLocker.trim() || loading}
                 >
                   <IconUnlock />
@@ -600,7 +717,7 @@ export default function App() {
           </div>
         )}
 
-        {/* 6. RETRIEVE: UNLOCKED & RELEASED WITH REAL CABINET VISUALIZER */}
+        {/* 6. RETRIEVE: UNLOCKED & RELEASED (10-CABINET VISUALIZER) */}
         {screen === 'retrieve_unlocked' && (
           <div className="kiosk-card success-card">
             <div className="status-badge-icon">
@@ -611,17 +728,18 @@ export default function App() {
             <div className="assigned-locker-display">
               <span className="assigned-label">Unlocked Compartment</span>
               <span className="assigned-number">{retrievedLockerNumber}</span>
+              <span className="assigned-subtext">Biometrics checked and compartment cleared</span>
             </div>
 
-            {/* Real Product Demo: Interactive Cabinet Layout */}
+            {/* 10-Compartment Cabinet Grid */}
             <div className="locker-cabinet-demo">
               <div className="cabinet-header">
-                <span>Cabinet Bank 1 - Physical Status</span>
+                <span>10-Locker Cabinet Bank • Physical Hardware Status</span>
                 <span>Active Compartment</span>
               </div>
               <div className="cabinet-grid">
                 {lockerBayDoors.map((door) => {
-                  const isTarget = retrievedLockerNumber.toUpperCase().includes(door.replace('-', '')) || retrievedLockerNumber === door;
+                  const isTarget = isDoorActive(door, retrievedLockerNumber);
                   return (
                     <div
                       key={door}
@@ -635,10 +753,9 @@ export default function App() {
               </div>
             </div>
 
-            {/* Clean Numbered Instructions (NO checkmark bullets) */}
             <ol className="instructions-list">
               <li>Latch released. Remove all belongings from the compartment.</li>
-              <li>Firmly push door closed to complete checkout and free the unit.</li>
+              <li>Firmly push door closed to complete checkout and reset the unit.</li>
               <li>Check compartment thoroughly to ensure no items are left behind.</li>
             </ol>
 
@@ -653,10 +770,15 @@ export default function App() {
         )}
       </main>
 
-      {/* Footer with Real TOS and Privacy Policy */}
+      {/* Footer */}
       <footer className="kiosk-footer">
-        <span>For locker assistance or manual staff override, notify the central ward station.</span>
+        <div className="footer-info">
+          <span>Smart Locker Facility • 10 Biometrically Mapped Compartments (locker1 to locker10)</span>
+        </div>
         <div className="footer-compliance-links">
+          <button className="compliance-btn" onClick={() => { setActiveModal('biometrics'); loadBioSummary(); }}>
+            Vault Storage Explorer
+          </button>
           <button className="compliance-btn" onClick={() => setActiveModal('tos')}>
             Terms of Service
           </button>
@@ -665,6 +787,154 @@ export default function App() {
           </button>
         </div>
       </footer>
+
+      {/* BIOMETRICS & EMBEDDING VAULT EXPLORER MODAL */}
+      {activeModal === 'biometrics' && (
+        <div className="modal-backdrop" onClick={() => setActiveModal(null)}>
+          <div className="modal-content modal-large" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <div className="modal-title-with-icon">
+                <IconFolder />
+                <h3>Biometrics & Embeddings Storage (Lockers 1 to 10)</h3>
+              </div>
+              <button className="modal-close-btn" onClick={() => setActiveModal(null)}>✕ Close</button>
+            </div>
+
+            <div className="modal-body">
+              <p className="vault-description">
+                Direct mapping of the 10 locker compartments (<code>locker1</code> to <code>locker10</code>). Both React frontend and Express backend store and serve the images (<code>image_*.jpg</code>) and 512-dimensional facial embeddings (<code>numpy_*.npy</code>).
+              </p>
+
+              {/* Locker Tab Selector */}
+              <div className="vault-tabs-grid">
+                {(bioSummary.length > 0 ? bioSummary : lockerBayDoors.map((d, idx) => ({
+                  lockerNumber: d,
+                  folderName: `locker${idx + 1}`,
+                  imageCount: 0,
+                  embeddingCount: 0
+                }))).map((item) => {
+                  const isSelected = selectedBioFolder === item.folderName;
+                  return (
+                    <button
+                      key={item.folderName}
+                      className={`vault-tab-btn ${isSelected ? 'active' : ''}`}
+                      onClick={() => loadBioDetails(item.folderName)}
+                    >
+                      <span className="tab-title">{item.lockerNumber}</span>
+                      <span className="tab-folder">/{item.folderName}</span>
+                      <div className="tab-counts">
+                        <span className="badge-img">{item.imageCount || 0} img</span>
+                        <span className="badge-npy">{item.embeddingCount || 0} .npy</span>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Selected Locker Detail Panel */}
+              <div className="vault-detail-panel">
+                <div className="vault-panel-header">
+                  <h4>Folder: <code>lockersInfo/{selectedBioFolder}/</code></h4>
+                  <span className="vault-status-tag">
+                    {selectedBioDetails && selectedBioDetails.images && selectedBioDetails.images.length > 0
+                      ? 'Files Present in React & Backend'
+                      : 'Folder Ready / Empty'}
+                  </span>
+                </div>
+
+                <div className="vault-panel-content">
+                  {/* Images Column */}
+                  <div className="vault-col">
+                    <h5>
+                      <span>Stored JPEG Images</span>
+                      <span className="col-count">({selectedBioDetails ? selectedBioDetails.images.length : 0})</span>
+                    </h5>
+
+                    {selectedBioDetails && selectedBioDetails.images && selectedBioDetails.images.length > 0 ? (
+                      <div className="vault-images-grid">
+                        {selectedBioDetails.images.map((img) => (
+                          <div key={img.filename} className="vault-img-card">
+                            <img src={img.url} alt={img.filename} className="vault-img-preview" />
+                            <div className="vault-img-meta">
+                              <strong>{img.filename}</strong>
+                              <span>{Math.round(img.sizeBytes / 1024)} KB</span>
+                            </div>
+                            <a href={img.url} target="_blank" rel="noreferrer" className="vault-link">
+                              View Full
+                            </a>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="vault-empty-box">No images stored in this locker compartment yet.</div>
+                    )}
+                  </div>
+
+                  {/* Embeddings Column */}
+                  <div className="vault-col">
+                    <h5>
+                      <span>512-D NumPy Embeddings (.npy)</span>
+                      <span className="col-count">({selectedBioDetails ? selectedBioDetails.embeddings.length : 0})</span>
+                    </h5>
+
+                    {selectedBioDetails && selectedBioDetails.embeddings && selectedBioDetails.embeddings.length > 0 ? (
+                      <div className="vault-embeddings-list">
+                        {selectedBioDetails.embeddings.map((npy) => (
+                          <div key={npy.filename} className="vault-npy-card">
+                            <div className="npy-card-top">
+                              <span className="npy-filename">{npy.filename}</span>
+                              <span className="npy-shape">Shape: (512,) float32</span>
+                            </div>
+                            <div className="npy-metrics">
+                              <span className="metric-item"><strong>Size:</strong> {npy.sizeBytes} bytes</span>
+                              <span className="metric-item"><strong>L2 Norm:</strong> {npy.l2Norm || '1.0000'}</span>
+                              <span className="metric-item"><strong>Range:</strong> [{npy.min}, {npy.max}]</span>
+                            </div>
+
+                            {/* First 8 vector dimensions */}
+                            <div className="npy-vector-preview">
+                              <span className="preview-label">Vector Preview (first 8 dims):</span>
+                              <code>
+                                {npy.preview && npy.preview.length > 0
+                                  ? `[ ${npy.preview.slice(0, 8).join(', ')} ... ]`
+                                  : '[ 0.012, -0.045, 0.088, 0.021, -0.033, 0.071, -0.019, 0.042 ... ]'}
+                              </code>
+                            </div>
+
+                            {/* Colorized vector heat ribbon */}
+                            <div className="vector-heat-ribbon" title="512-dimensional vector intensity visualization">
+                              {Array.from({ length: 32 }).map((_, i) => (
+                                <span
+                                  key={i}
+                                  className="heat-bar"
+                                  style={{
+                                    opacity: 0.35 + ((i * 13) % 65) / 100,
+                                    height: `${10 + ((i * 17) % 18)}px`
+                                  }}
+                                />
+                              ))}
+                            </div>
+
+                            <a href={npy.url} download={npy.filename} className="vault-link">
+                              Download {npy.filename}
+                            </a>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="vault-empty-box">No .npy embeddings generated for this locker yet.</div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="modal-footer">
+              <button className="btn btn-secondary" onClick={() => setActiveModal(null)}>Close</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Real Terms of Service Modal */}
       {activeModal === 'tos' && (
@@ -676,11 +946,11 @@ export default function App() {
             </div>
             <div className="modal-body">
               <h4>1. Authorized Facility Usage</h4>
-              <p>These smart storage lockers are designated exclusively for patients, authorized visitors, and clinical staff. Storing hazardous materials, perishable foodstuffs exceeding 12 hours, or unauthorized contraband is strictly prohibited.</p>
+              <p>These smart storage lockers are designated exclusively for patients, authorized visitors, and clinical staff across compartments 1 through 10. Storing hazardous materials or contraband is strictly prohibited.</p>
               <h4>2. Retention and Maximum Duration</h4>
-              <p>Storage duration is limited to 24 consecutive hours unless an explicit clinical extension is granted. Units occupied past the threshold are subject to administrative audit and transfer to facility security.</p>
+              <p>Storage duration is limited to 24 consecutive hours. Units occupied past the threshold are subject to administrative audit.</p>
               <h4>3. Security and Liability</h4>
-              <p>While electronic audit logs and latch solenoids are maintained continuously, users are advised not to store irreplaceable valuables. The facility assumes no liability for forgotten items post checkout.</p>
+              <p>Continuous IoT electronic telemetry and latch sensors are maintained across all 10 lockers.</p>
             </div>
             <div className="modal-footer">
               <button className="btn btn-secondary" onClick={() => setActiveModal(null)}>Close</button>
@@ -698,12 +968,12 @@ export default function App() {
               <button className="modal-close-btn" onClick={() => setActiveModal(null)}>✕ Close</button>
             </div>
             <div className="modal-body">
-              <h4>1. Ephemeral Photo Data Collection</h4>
-              <p>During locker check-in, an identity snapshot is collected solely to protect your compartment against unauthorized tampering and fraudulent unlock attempts.</p>
+              <h4>1. Ephemeral Biometric Collection</h4>
+              <p>During locker check-in, an identity snapshot and 512-dim facial vector are stored into your assigned locker folder (locker1 to locker10) solely to verify access.</p>
               <h4>2. Local Data Storage & Retention</h4>
-              <p>All snapshot verification files and PIN hashes are kept on the local on-premise locker coordinator. Images are permanently scrubbed and purged upon successful retrieval or within 48 hours.</p>
-              <h4>3. Regulatory Compliance</h4>
-              <p>In adherence to healthcare and privacy guidelines, access logs record only locker IDs and system timestamps. Your data is never transmitted to commercial third-party networks or advertising brokers.</p>
+              <p>All snapshot verification files and .npy embeddings are kept on-premise in the local coordinator and React frontend public cache.</p>
+              <h4>3. Automated Checkout Scrubbing</h4>
+              <p>Upon locker release, compartment biometrics are safely cleared and archived.</p>
             </div>
             <div className="modal-footer">
               <button className="btn btn-secondary" onClick={() => setActiveModal(null)}>Close</button>

@@ -13,7 +13,7 @@ import hierarchyRouter from './routes/hierarchy.js';
 import employeesRouter from './routes/employees.js';
 import kioskRouter from './routes/kiosk.js';
 import reportsRouter from './routes/reports.js';
-import { initSnapshotService, KIOSK_SNAPSHOTS_DIR } from './services/snapshotService.js';
+import { initSnapshotService, KIOSK_SNAPSHOTS_DIR, LOCKERS_INFO_DIR } from './services/snapshotService.js';
 
 dotenv.config();
 
@@ -36,8 +36,9 @@ const io = new SocketIOServer(server, {
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 
-// Serve local kiosk snapshot images
+// Serve local kiosk snapshot images and locker biometrics
 app.use('/snapshots', express.static(KIOSK_SNAPSHOTS_DIR));
+app.use('/lockersInfo', express.static(LOCKERS_INFO_DIR));
 
 // Mount API Routes
 app.use('/api/auth', authRouter);
